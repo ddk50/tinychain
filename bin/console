@@ -14,6 +14,8 @@ if $0 == __FILE__
     node.run()
   when 'genesis' then
     Tinychain::Block.generate_genesis_block()
+  when 'test' then
+    Tinychain::Block.test()
   else
     EM.run do
       host = "127.0.0.1"

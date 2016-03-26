@@ -5,7 +5,12 @@ Bundler.require
 require "tinychain/version"
 
 module Tinychain
-  # Your code goes here...
+
+  class InvalidUnknownFormat < StandardError; end
+  class InvalidFieldFormat < StandardError; end
+  class InvalidRequest < StandardError; end
+  
+  
   MAGICK_HEADER = 0x11451419
   EVENT_INTERVAL = 10
   MAX_CONNECTIONS = 4
@@ -15,15 +20,14 @@ module Tinychain
               {host: "127.0.0.1", port: 9993},
               {host: "127.0.0.1", port: 9994}
              ]
-  POW_LIMIT = 0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff
-
-  ## mining genesis hash 
-  ## mining genesis hash time: 2016-03-21 20:19:52 +0900 (unixtime: 1458559192)
-  ## genesis hash: 00000a268d97d5ed327cd8f2a76dbfd6791f2ff329e252527c3babcb1713f419, nonce: 646449
-  GENESIS_HASH  = 0x00000a268d97d5ed327cd8f2a76dbfd6791f2ff329e252527c3babcb1713f419
-  GENESIS_NONCE = 646449
+  POW_LIMIT = "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  
+  # mining genesis hash time: 2016-03-25 19:42:55 +0900 (unixtime: 1458902575)
+  # genesis hash: 000008bc651142e421e4c4f9b83883d149b2b0871155c63edf84b9083f0fdcc1, nonce: 1264943
+  GENESIS_HASH  = "000008bc651142e421e4c4f9b83883d149b2b0871155c63edf84b9083f0fdcc1"
+  GENESIS_NONCE = 1264943
   GENESIS_BITS  = 0x1903a30
-  GENESIS_TIME  = 1458543219
+  GENESIS_TIME  = 1458902575
   
   POW_TARGET_TIMESPAN = 14 * 24 * 60 * 60 ## two weeks
 
@@ -46,33 +50,64 @@ module Tinychain
     string :payloadstr, :read_length => :strlen
   end
 
+  class BlockChain
+    attr_accessor :next, :prev
+
+    def initialize(block)
+    end
+
+    def add_block
+    end
+    
+  end
+
   class Block
-    attr_accessor :prev, :next
+    attr_accessor :prev_hash
     attr_accessor :height, :bits, :nonce
     attr_accessor :time, :hash
     attr_accessor :blkblock
     attr_accessor :jsonstr
+    attr_accessor :genesis
 
-    attr_reader :genesis
-    
-    def initialize(genesis = false, prev_block, nonce, bits, time, height, jsonstr)
-      @next = @prev = nil
-      if genesis
-        @prev    = prev_block
-        @genesis = true
-        @nonce   = GENESIS_NONCE
-        @bits    = GENESIS_BITS
-        @time     = GENESIS_TIME
-        @height   = 0
-        @jsonstr  = jsonstr
-      else
-        @genesis = false
-        @nonce   = nonce
-        @bits    = bits
-        @time    = time.to_i
-        @height  = height
-        @jsonstr = jsonstr
+    def self.new_genesis()
+      obj = self.new
+      obj.genesis   = true
+      obj.nonce     = GENESIS_NONCE
+      obj.bits      = GENESIS_BITS
+      obj.time      = GENESIS_TIME
+      obj.prev_hash = 0
+      obj.height    = 0
+      obj.jsonstr   = ""
+      return obj
+    end
+
+    def self.new_block(prev_hash, nonce, bits, time, height, payloadstr)
+      obj = self.new
+      obj.prev_hash  = prev_hash
+      obj.genesis = false
+      obj.nonce   = nonce
+      obj.bits    = bits
+      obj.time    = time.to_i
+      obj.height  = height
+      obj.jsonstr = payloadstr
+      return obj
+    end
+
+    def self.parse_json(jsonstr)
+      jsonhash = JSON.parse(jsonstr)
+      raise InvalidUnknownFormat if not jsonhash["type"] == "block"
+      obj = self.new
+      begin
+        obj.height    = jsonhash["height"]
+        obj.prev_hash = jsonhash["prev_hash"].to_i(16)
+        obj.nonce     = jsonhash["nonce"]
+        obj.bits      = jsonhash["bits"]
+        obj.time      = jsonhash["time"]
+        obj.jsonstr   = jsonhash["jsonstr"]
+      rescue KeyError => e
+        raise InvalidFieldFormat
       end
+      return obj
     end
 
     def to_binary_s
@@ -86,26 +121,30 @@ module Tinychain
       return @hash
     end
 
+    def to_sha256hash_s
+      to_sha256hash.to_s(16).rjust(64, '0')
+    end
+
     def refresh
       @blkblock = @hash = nil
     end
 
     def to_json
-      {type: "block", height: @height, prevhash: @prevhash.to_s(16).rjust(64, '0'), 
-        nonce: @nonce, bit: @bits, time: @time.to_s, jsonstr: @jsonstr, 
-        strlen: @jsonstr.size}.to_json
+      {type: "block", height: @height, prev_hash: @prev_hash.to_s(16).rjust(64, '0'), 
+        nonce: @nonce, bit: @bits, time: @time, jsonstr: @jsonstr}.to_json
     end
 
     private
+    
     def generate_blkblock
-      prev_hash = @genesis ? 0x0 : @prev.to_sha256hash()
       @blkblock ||= Tinychain::BlkBlock.new(block_id: @height, time: @time, bits: @bits,
-                                            prev_hash: prev_hash, strlen: @jsonstr.size(),
+                                            prev_hash: @prev_hash, strlen: @jsonstr.size(),
                                             payloadstr: @jsonstr, nonce: @nonce)
       return @blkblock
     end
 
     public
+    
     def self.generate_genesis_block
       target = "00000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
       
@@ -114,12 +153,10 @@ module Tinychain
       t = target.to_i(16)
       
       time = Time.now
-
       puts "mining genesis hash time: #{time} (unixtime: #{time.to_i})"
-
       inttime = time.to_i
       
-      until found        
+      until found
         
         $stdout.print sprintf("trying... %d \r", nonce)
         
@@ -276,3 +313,4 @@ module Tinychain
     
   end
 end
+
