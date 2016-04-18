@@ -9,7 +9,8 @@ module Tinychain
   class InvalidUnknownFormat < StandardError; end
   class InvalidFieldFormat < StandardError; end
   class InvalidRequest < StandardError; end
-  
+  class InvalidBlock < StandardError; end
+  class NoAvailableBlockFound < StandardError; end
   
   MAGICK_HEADER = 0x11451419
   EVENT_INTERVAL = 10
@@ -51,14 +52,85 @@ module Tinychain
   end
 
   class BlockChain
-    attr_accessor :next, :prev
 
-    def initialize(block)
+    attr_reader :root
+    attr_accessor :winner_block_head
+
+    def initialize(genesis_block)
+      @root = genesis_block
     end
 
-    def add_block
+    def add_block(prev_hash, newblock)
+      block = find_block_by_hash(prev_hash)
+      
+      raise NoAvailableBlockFound if block == nil
+      block.next << newblock
+      
+      winner_block = find_winner_block_head(true)
+      
+      if newblock.to_sha256hash_s == winner_block.to_sha256hash_s
+        @winner_block_head = newblock
+      end
+
+      return newblock
+    end
+
+    def find_winner_block_head(refresh = false)
+      if refresh
+        @winner_block_head = nil
+      end
+      @winner_block_head ||= do_find_winner_block_head(@root, 0).first
     end
     
+    def do_find_winner_block_head(block, depth)
+      
+      return [block, depth] if block.next.size == 0
+      depth = depth + 1
+      
+      if block.next.size > 1
+        ## has branch 
+        current_depth = 0
+        deepest_block = block.next.first
+
+        ## find a winner block
+        block.next.each{|b|
+          bl, dp = do_find_winner_block_head(b, 0)
+          if dp > current_depth then
+            current_depth = dp
+            deepest_block = bl
+          end
+        }
+
+        ## dig the winner block
+        return do_find_winner_block_head(deepest_block, depth + current_depth)
+      else
+        ## has no branch
+        return do_find_winner_block_head(block.next.first, depth)
+      end
+    end
+    
+    def find_block_by_hash(hash_str)
+      do_find_block_by_hash(@root, hash_str)
+    end
+
+    def do_find_block_by_hash(block, hash_str)
+
+      return block if block.to_sha256hash_s == hash_str
+      return nil if block.next.size == 0
+
+      block.next.each{|b|
+        tmp = do_find_block_by_hash(b, hash_str)
+        if tmp != nil
+          ##
+          ## found it
+          ##
+          return tmp
+        end
+      }
+
+      return nil
+      
+    end
   end
 
   class Block
@@ -68,6 +140,8 @@ module Tinychain
     attr_accessor :blkblock
     attr_accessor :jsonstr
     attr_accessor :genesis
+    
+    attr_accessor :next, :prev
 
     def self.new_genesis()
       obj = self.new
@@ -78,6 +152,8 @@ module Tinychain
       obj.prev_hash = 0
       obj.height    = 0
       obj.jsonstr   = ""
+      obj.prev      = []
+      obj.next      = []
       return obj
     end
 
@@ -90,6 +166,8 @@ module Tinychain
       obj.time    = time.to_i
       obj.height  = height
       obj.jsonstr = payloadstr
+      obj.prev    = []
+      obj.next    = []
       return obj
     end
 
@@ -104,6 +182,8 @@ module Tinychain
         obj.bits      = jsonhash["bits"]
         obj.time      = jsonhash["time"]
         obj.jsonstr   = jsonhash["jsonstr"]
+        obj.prev      = []
+        obj.next      = []
       rescue KeyError => e
         raise InvalidFieldFormat
       end
