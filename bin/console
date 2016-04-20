@@ -5,6 +5,7 @@ require "tinychain"
 
 connections = []
 log = Log4r::Logger.new(__FILE__)
+log.outputters << Log4r::Outputter.stdout
 
 if $0 == __FILE__
   case ARGV[0]
@@ -16,6 +17,8 @@ if $0 == __FILE__
     Tinychain::Block.generate_genesis_block()
   when 'test' then
     Tinychain::Block.test()
+  when 'localtest' then
+    Tinychain::BlockChain.local_mining()
   else
     EM.run do
       host = "127.0.0.1"

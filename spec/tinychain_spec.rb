@@ -23,7 +23,7 @@ describe Tinychain do
     describe '#to_json' do
       it 'should convert the genesis block to json' do
         jsonstr=<<JSON
-{"type":"block","height":0,"prev_hash":"0000000000000000000000000000000000000000000000000000000000000000","nonce":1264943,"bit":26229296,"time":1458902575,"jsonstr":""}
+{"type":"block","height":0,"prev_hash":"0000000000000000000000000000000000000000000000000000000000000000","nonce":8826,"bit":520093695,"time":1461025176,"jsonstr":""}
 JSON
         jsonstr.chomp!
         expect(@genesis.to_json).to eq(jsonstr)
@@ -192,6 +192,15 @@ JSON
         end
       end
 
+    end
+
+
+    context "when blockchain has branches" do
+      describe "#find_winner_block_head" do
+        it 'should find out the winner block' do
+          puts Tinychain::BlockChain.get_target(0x1fffffff)
+        end
+      end
     end
 
   end

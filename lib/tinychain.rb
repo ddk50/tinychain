@@ -21,16 +21,18 @@ module Tinychain
               {host: "127.0.0.1", port: 9993},
               {host: "127.0.0.1", port: 9994}
              ]
+  
   POW_LIMIT = "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-  
-  # mining genesis hash time: 2016-03-25 19:42:55 +0900 (unixtime: 1458902575)
-  # genesis hash: 000008bc651142e421e4c4f9b83883d149b2b0871155c63edf84b9083f0fdcc1, nonce: 1264943
-  GENESIS_HASH  = "000008bc651142e421e4c4f9b83883d149b2b0871155c63edf84b9083f0fdcc1"
-  GENESIS_NONCE = 1264943
-  GENESIS_BITS  = 0x1903a30
-  GENESIS_TIME  = 1458902575
-  
   POW_TARGET_TIMESPAN = 14 * 24 * 60 * 60 ## two weeks
+  POW_DIFFICULTY_BLOCKSPAN = 2016
+
+  ## target: 0000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+  ## mining genesis hash time: 2016-04-19 09:19:36 +0900 (unixtime: 1461025176)
+  ## genesis hash: 0000610c19db37b3352ef55d87bc22426c8fa0a7333e08658b4a7a9b95bc54cf, nonce: 8826
+  GENESIS_HASH  = "0000610c19db37b3352ef55d87bc22426c8fa0a7333e08658b4a7a9b95bc54cf"
+  GENESIS_NONCE = 8826
+  GENESIS_BITS  = 0x1effffff
+  GENESIS_TIME  = 1461025176 
 
   class BlkBlock < BinData::Record
     endian :little
@@ -79,33 +81,44 @@ module Tinychain
       if refresh
         @winner_block_head = nil
       end
-      @winner_block_head ||= do_find_winner_block_head(@root, 0).first
+      @winner_block_head ||= do_find_winner_block_head(@root, 0, 0, GENESIS_BITS).first
     end
     
-    def do_find_winner_block_head(block, depth)
+    def do_find_winner_block_head(block, depth, cumulative_depth, difficulty)
       
-      return [block, depth] if block.next.size == 0
-      depth = depth + 1
+      return [block, depth, cumulative_depth] if block.next.size == 0
+
+      depth += 1
+
+      if cumulative_depth > POW_DIFFICULTY_BLOCKSPAN
+        cumulative_depth = 0        
+        difficulty = block_new_difficulty(difficulty, block.time)
+      else
+        cumulative_depth += 1
+      end
       
       if block.next.size > 1
         ## has branch 
         current_depth = 0
+        current_cdp = cumulative_depth
         deepest_block = block.next.first
 
         ## find a winner block
         block.next.each{|b|
-          bl, dp = do_find_winner_block_head(b, 0)
+          bl, dp, cdp = do_find_winner_block_head(b, 1, 1, difficulty)
           if dp > current_depth then
             current_depth = dp
+            current_cdp   = cdp
             deepest_block = bl
           end
         }
 
-        ## dig the winner block
-        return do_find_winner_block_head(deepest_block, depth + current_depth)
-      else
+        return [deepest_block, depth + current_depth,
+                cumulative_depth + current_cdp, difficulty]
+      else       
+        
         ## has no branch
-        return do_find_winner_block_head(block.next.first, depth)
+        return do_find_winner_block_head(block.next.first, depth, cumulative_depth, difficulty)
       end
     end
     
@@ -129,8 +142,79 @@ module Tinychain
       }
 
       return nil
-      
     end
+
+    ##
+    ## time_of_lastblocks: uint64_t
+    ##
+    def self.block_new_difficulty(old_difficulty, time_of_lastblocks)
+      new_difficulty = old_difficulty * (time_of_lastblocks / 20160.0)
+      return new_difficulty.to_i
+    end
+
+    def self.get_target(bits)
+      coefficient = bits & 0xffffff
+      exponent    = (bits >> 24) & 0xff
+
+      target     = coefficient * (2 ** (8 * (exponent - 3)))
+      str        = target.to_s(16).rjust(64, '0')
+      target_str = ""
+
+      str.reverse!
+      
+      first_hex = nil
+      str.each_char{|c|        
+        if first_hex == nil && c != '0'
+          first_hex = true
+        end
+
+        if first_hex && c == '0'
+          break
+        end
+        
+        target_str << 'f'
+      }
+
+      return [target_str.rjust(64, '0'), target]
+    end
+
+    def self.do_mining(log, bits, payloadstr)
+      target = BlockChain.get_target(bits).first
+      
+      found = nil
+      nonce = 0
+      t = target.to_i(16)
+      
+      time = Time.now
+      log.info { "time of start mining: #{time} (unixtime: #{time.to_i})" }
+      inttime = time.to_i
+      
+      until found               
+        d = Tinychain::BlkBlock.new(nonce: nonce, block_id: 0,
+                                    time: inttime, bits: bits,
+                                    prev_hash: 0, strlen: 0, payloadstr: "")
+        h = Digest::SHA256.hexdigest(Digest::SHA256.digest(d.to_binary_s)).to_i(16)
+
+        if h <= t
+          found = [h.to_s(16).rjust(64, '0'), nonce]
+          break
+        end
+        nonce += 1
+      end
+      log.info { "found! hash: #{found[0]}, nonce: #{found[1]}" }
+      
+      return nonce
+    end
+
+    def self.do_local_mining_connecting_chains(log)
+      
+      genesis = Tinychain::Block.new_genesis()
+      
+      loop do
+      ##  Tinychain::Block.do_mining(log, )
+      end
+    end
+
   end
 
   class Block
@@ -221,12 +305,15 @@ module Tinychain
                                             prev_hash: @prev_hash, strlen: @jsonstr.size(),
                                             payloadstr: @jsonstr, nonce: @nonce)
       return @blkblock
-    end
+    end    
 
     public
     
     def self.generate_genesis_block
-      target = "00000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      
+      target = BlockChain.get_target(GENESIS_BITS).first
+      
+      puts "target: " + target
       
       found = nil
       nonce = 0
@@ -250,18 +337,10 @@ module Tinychain
           break
         end
 
-        nonce+=1       
+        nonce += 1
         
       end
       puts "genesis hash: #{found[0]}, nonce: #{found[1]}"
-    end
-
-    ##
-    ## time_of_lastblocks: uint64_t
-    ##
-    def self.block_new_difficulty(old_difficulty, time_of_lastblocks)
-      new_difficulty = old_difficulty * (time_of_lastblocks / 20160.0)
-      return new_difficulty.to_i
     end
     
   end
@@ -280,8 +359,6 @@ module Tinychain
       @timers = {}
       @log = log
       @current_block_height = 0
-
-      build_genesis_block()
     end
 
     def run
@@ -323,7 +400,7 @@ module Tinychain
     
   end
 
-  class ConnectionHandler < EM::Connection   
+  class ConnectionHandler < EM::Connection
 
     attr_accessor :sockaddr
     attr_accessor :connections
@@ -352,7 +429,7 @@ module Tinychain
     end
 
     def post_init
-      EM.schedule{ on_handshake_begin }      
+      EM.schedule{ on_handshake_begin }
     end
     
     def receive_data(data)
