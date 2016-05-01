@@ -23,8 +23,8 @@ module Tinychain
              ]
   
   POW_LIMIT = "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-  POW_TARGET_TIMESPAN = 14 * 24 * 60 * 60 ## two weeks
-  POW_DIFFICULTY_BLOCKSPAN = 2016
+  POW_TARGET_TIMESPAN = 10 ## 10 minutes
+  POW_DIFFICULTY_BLOCKSPAN = 100
 
   ## target: 0000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
   ## mining genesis hash time: 2016-04-19 09:19:36 +0900 (unixtime: 1461025176)
@@ -32,7 +32,7 @@ module Tinychain
   GENESIS_HASH  = "0000610c19db37b3352ef55d87bc22426c8fa0a7333e08658b4a7a9b95bc54cf"
   GENESIS_NONCE = 8826
   GENESIS_BITS  = 0x1effffff
-  GENESIS_TIME  = 1461025176 
+  GENESIS_TIME  = 1461025176
 
   class BlkBlock < BinData::Record
     endian :little
@@ -57,9 +57,12 @@ module Tinychain
 
     attr_reader :root
     attr_accessor :winner_block_head
+    attr_accessor :head_info_array
 
     def initialize(genesis_block)
       @root = genesis_block
+      @winner_block_head = genesis_block
+      @head_info_array = [@root, 0, 0, @root.bits]
     end
 
     def add_block(prev_hash, newblock)
@@ -68,57 +71,63 @@ module Tinychain
       raise NoAvailableBlockFound if block == nil
       block.next << newblock
       
-      winner_block = find_winner_block_head(true)
+      find_winner_block_head(true)
       
-      if newblock.to_sha256hash_s == winner_block.to_sha256hash_s
-        @winner_block_head = newblock
-      end
-
       return newblock
     end
 
     def find_winner_block_head(refresh = false)
       if refresh
         @winner_block_head = nil
+        @head_info_array = nil
       end
-      @winner_block_head ||= do_find_winner_block_head(@root, 0, 0, GENESIS_BITS).first
+      @head_info_array ||= do_find_winner_block_head(@root, 0, 0, GENESIS_BITS, GENESIS_TIME)
+      @winner_block_head ||= @head_info_array.first
+
+      return @winner_block_head
     end
     
-    def do_find_winner_block_head(block, depth, cumulative_depth, difficulty)
+    def do_find_winner_block_head(block, depth, cumulative_depth, difficulty, latest_time)
       
-      return [block, depth, cumulative_depth] if block.next.size == 0
-
+      return [block, depth, cumulative_depth, difficulty] if block.next.size == 0
+      
       depth += 1
 
       if cumulative_depth > POW_DIFFICULTY_BLOCKSPAN
-        cumulative_depth = 0        
-        difficulty = block_new_difficulty(difficulty, block.time)
+        cumulative_depth = 0
+        time = block.time - latest_time
+        difficulty  = block_new_difficulty(difficulty, time)
+        latest_time = block.time
       else
         cumulative_depth += 1
       end
       
       if block.next.size > 1
-        ## has branch 
-        current_depth = 0
+        ## has branch
+        current_depth = 1
         current_cdp = cumulative_depth
         deepest_block = block.next.first
+        deepest_block_difficulty = difficulty
 
         ## find a winner block
         block.next.each{|b|
-          bl, dp, cdp = do_find_winner_block_head(b, 1, 1, difficulty)
+          bl, dp, cdp, diff = do_find_winner_block_head(b, 1, 1, difficulty, latest_time)
           if dp > current_depth then
+            deepest_block = bl
             current_depth = dp
             current_cdp   = cdp
-            deepest_block = bl
+            deppest_block_difficulty = diff
           end
         }
 
-        return [deepest_block, depth + current_depth,
-                cumulative_depth + current_cdp, difficulty]
-      else       
-        
+        return [ deepest_block, 
+                (depth + current_depth), 
+                (cumulative_depth + current_cdp), 
+                deepest_block_difficulty ]
+      else        
         ## has no branch
-        return do_find_winner_block_head(block.next.first, depth, cumulative_depth, difficulty)
+        return do_find_winner_block_head(block.next.first, depth,
+                                         cumulative_depth, difficulty, latest_time)
       end
     end
     
@@ -148,7 +157,7 @@ module Tinychain
     ## time_of_lastblocks: uint64_t
     ##
     def self.block_new_difficulty(old_difficulty, time_of_lastblocks)
-      new_difficulty = old_difficulty * (time_of_lastblocks / 20160.0)
+      new_difficulty = old_difficulty * (time_of_lastblocks / POW_TARGET_TIMESPAN.to_f)
       return new_difficulty.to_i
     end
 
@@ -177,44 +186,63 @@ module Tinychain
 
       return [target_str.rjust(64, '0'), target]
     end
+    
 
-    def self.do_mining(log, bits, payloadstr)
+    def self.do_mining(log, blockchain, bits, payloadstr)
+      
       target = BlockChain.get_target(bits).first
-      
-      found = nil
-      nonce = 0
+
+      log.info { "current target: #{target}" }
+      found  = nil
+      nonce  = 0
       t = target.to_i(16)
-      
+
       time = Time.now
-      log.info { "time of start mining: #{time} (unixtime: #{time.to_i})" }
       inttime = time.to_i
       
-      until found               
+      until found       
+
         d = Tinychain::BlkBlock.new(nonce: nonce, block_id: 0,
                                     time: inttime, bits: bits,
                                     prev_hash: 0, strlen: 0, payloadstr: "")
         h = Digest::SHA256.hexdigest(Digest::SHA256.digest(d.to_binary_s)).to_i(16)
-
+        
         if h <= t
           found = [h.to_s(16).rjust(64, '0'), nonce]
+          
+          prev_hash = blockchain.winner_block_head.to_sha256hash_s()
+          prev_height = blockchain.winner_block_head.height + 1
+          
+          block = Tinychain::Block.new_block(prev_hash, nonce, bits, inttime, prev_height, payloadstr)
+          
+          blockchain.add_block(prev_hash, block)
+          
+          log.info { "found! hash: #{found[0]}, nonce: #{found[1]}" }
           break
         end
+        
         nonce += 1
       end
-      log.info { "found! hash: #{found[0]}, nonce: #{found[1]}" }
       
-      return nonce
     end
 
-    def self.do_local_mining_connecting_chains(log)
-      
+
+    def self.local_mining(log)
       genesis = Tinychain::Block.new_genesis()
+      blockchain = Tinychain::BlockChain.new(genesis)
+      
+      bits = genesis.bits
+      start_time = Time.now
+      
+      log.info { "time of start mining: #{start_time} " }
+      cumulative_blocks = 0
       
       loop do
-      ##  Tinychain::Block.do_mining(log, )
-      end
+        bits = blockchain.head_info_array.last
+        Tinychain::BlockChain.do_mining(log, blockchain, bits, "")
+      end      
     end
-
+    
   end
 
   class Block
@@ -243,11 +271,11 @@ module Tinychain
 
     def self.new_block(prev_hash, nonce, bits, time, height, payloadstr)
       obj = self.new
-      obj.prev_hash  = prev_hash
+      obj.prev_hash  = prev_hash.to_i(16)
       obj.genesis = false
       obj.nonce   = nonce
       obj.bits    = bits
-      obj.time    = time.to_i
+      obj.time    = time
       obj.height  = height
       obj.jsonstr = payloadstr
       obj.prev    = []
@@ -385,7 +413,7 @@ module Tinychain
       }      
     end
 
-    def work_getblock      
+    def work_getblock
       @log.info { "<< getblock" }
     end
 

@@ -18,7 +18,7 @@ if $0 == __FILE__
   when 'test' then
     Tinychain::Block.test()
   when 'localtest' then
-    Tinychain::BlockChain.local_mining()
+    Tinychain::BlockChain.local_mining(log)
   else
     EM.run do
       host = "127.0.0.1"

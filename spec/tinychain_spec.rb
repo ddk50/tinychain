@@ -41,6 +41,15 @@ JSON
 
   end
 
+  context "when a block has been given" do
+    describe '#to_sha256hash_s' do
+      it 'should make the sha256 hash' do
+        block = Tinychain::Block.new_block("0000000000000000000000000000000000000000000000000000000000000000", 8826, 520093695, 1461025176, 0, "")
+        expect(block.to_sha256hash_s()).to eq(Tinychain::GENESIS_HASH)
+      end
+    end
+  end
+
   context "when a bad json has been given" do
     describe "#parse_json" do
       it 'should be raise a error' do
@@ -187,18 +196,17 @@ JSON
           @blockchain.add_block(@hash[7], block)
 
           ret = @blockchain.find_block_by_hash(@hash[6])
-          expect(ret.to_sha256hash_s).to eq(@hash[6])
+          expect(ret.to_sha256hash_s).to eq(@hash[6])          
           
         end
       end
-
     end
-
 
     context "when blockchain has branches" do
       describe "#find_winner_block_head" do
         it 'should find out the winner block' do
-          puts Tinychain::BlockChain.get_target(0x1fffffff)
+          ret = Tinychain::BlockChain.get_target(0x1effffff)
+          expect(ret.first).to eq("0000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
         end
       end
     end
